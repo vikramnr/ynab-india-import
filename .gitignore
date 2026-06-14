@@ -1,20 +1,27 @@
-# Environment / secrets
+# Environment
 .env
-
-# Python
+.env.local
+*.pyc
 __pycache__/
-*.py[cod]
-*.egg-info/
-dist/
-build/
-.venv/
-venv/
+.pytest_cache/
 
-# Bank statements (keep off version control)
+# Configuration (never commit with real credentials)
+config.yml
+config.local.yml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.coverage
+htmlcov/
+
+# Project
+*.xlsx
 *.csv
 *.xls
-*.xlsx
-
-# OS
-.DS_Store
-Thumbs.db

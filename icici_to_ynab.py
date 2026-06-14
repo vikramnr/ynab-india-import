@@ -8,11 +8,12 @@ Usage:
     python icici_to_ynab.py --file statement.xlsx --account-id <ynab_account_id> --dry-run
 
 Setup:
-    pip install pandas openpyxl xlrd requests python-dotenv
+    pip install pandas openpyxl xlrd requests pyyaml python-dotenv
+    cp config.yml.example config.yml
+    # Edit config.yml with your YNAB API token
 
-Create a .env file in the same directory:
-    YNAB_API_TOKEN=your_token_here
-    YNAB_BUDGET_ID=last-used   # or your specific budget UUID
+Create a config.yml file in the same directory (see config.yml for format).
+Or set environment variables (YNAB_API_TOKEN, YNAB_BUDGET_ID, etc.)
 """
 
 import os
@@ -24,16 +25,9 @@ import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
 
+from config import load_config, get_config, ConfigError
+
 load_dotenv()
-
-# ── Config ────────────────────────────────────────────────────────────────────
-
-YNAB_API_TOKEN = os.getenv("YNAB_API_TOKEN")
-YNAB_BUDGET_ID = os.getenv("YNAB_BUDGET_ID", "last-used")
-YNAB_BASE_URL  = f"https://api.youneedabudget.com/v1/budgets/{YNAB_BUDGET_ID}"
-
-HEADERS = {"Authorization": f"Bearer {YNAB_API_TOKEN}"}
-
 
 # ── ICICI Statement Parser ────────────────────────────────────────────────────
 
@@ -135,7 +129,7 @@ def load_statement(filepath: str) -> pd.DataFrame:
     return normalise_columns(df)
 
 
-# ── YNAB Conversion ───────────────────────────────────────────────────────────
+# ── YNAB Conversion ────────────────────────────────────────────────────────
 
 def make_import_id(date: str, amount_milliunits: int, description: str, index: int) -> str:
     """
@@ -185,15 +179,18 @@ def to_ynab_transactions(df: pd.DataFrame, account_id: str) -> list[dict]:
     return transactions
 
 
-# ── YNAB API ──────────────────────────────────────────────────────────────────
+# ── YNAB API ───────────────────────────────────────────────────────────
 
-def get_accounts() -> list[dict]:
-    resp = requests.get(f"{YNAB_BASE_URL}/accounts", headers=HEADERS)
+def get_accounts(config) -> list[dict]:
+    """Fetch list of YNAB accounts."""
+    headers = {"Authorization": f"Bearer {config.ynab_api_token}"}
+    resp = requests.get(f"{config.ynab_base_url}/accounts", headers=headers)
     resp.raise_for_status()
     return resp.json()["data"]["accounts"]
 
 
-def push_transactions(transactions: list[dict], dry_run: bool = False) -> dict:
+def push_transactions(config, transactions: list[dict], dry_run: bool = False) -> dict:
+    """Push transactions to YNAB API."""
     if dry_run:
         print(f"\n[DRY RUN] Would send {len(transactions)} transactions to YNAB.")
         for t in transactions[:5]:
@@ -202,13 +199,16 @@ def push_transactions(transactions: list[dict], dry_run: bool = False) -> dict:
             print(f"  ... and {len(transactions) - 5} more")
         return {}
 
-    # YNAB allows max 1000 per request; chunk if needed
+    headers = {"Authorization": f"Bearer {config.ynab_api_token}"}
+    batch_size = config.max_batch_size
+
+    # YNAB allows max batch_size per request; chunk if needed
     results = []
-    for chunk_start in range(0, len(transactions), 1000):
-        chunk = transactions[chunk_start:chunk_start + 1000]
+    for chunk_start in range(0, len(transactions), batch_size):
+        chunk = transactions[chunk_start:chunk_start + batch_size]
         resp = requests.post(
-            f"{YNAB_BASE_URL}/transactions",
-            headers=HEADERS,
+            f"{config.ynab_base_url}/transactions",
+            headers=headers,
             json={"transactions": chunk},
         )
         if not resp.ok:
@@ -218,59 +218,111 @@ def push_transactions(transactions: list[dict], dry_run: bool = False) -> dict:
         results.append(data)
         dupes = len(data.get("duplicate_import_ids", []))
         created = len(data.get("transaction_ids", []))
-        print(f"  ✓ Chunk {chunk_start//1000 + 1}: {created} created, {dupes} duplicates skipped")
+        print(f"  ✓ Chunk {chunk_start//batch_size + 1}: {created} created, {dupes} duplicates skipped")
 
     return results
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
+# ── CLI ────────────────────────────────────────────────────────────
 
-def list_accounts():
+def list_accounts(config):
+    """List all YNAB accounts."""
     print("\nYour YNAB accounts:\n")
-    for acc in get_accounts():
+    for acc in get_accounts(config):
         if not acc["deleted"] and not acc["closed"]:
             print(f"  {acc['name']:<35} {acc['id']}")
     print()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Import ICICI Bank statement into YNAB")
-    parser.add_argument("--file",       help="Path to ICICI statement (.csv or .xlsx)")
-    parser.add_argument("--account-id", help="YNAB account UUID to import into")
-    parser.add_argument("--dry-run",    action="store_true", help="Parse and preview without sending to YNAB")
-    parser.add_argument("--list-accounts", action="store_true", help="List all YNAB accounts and their IDs")
+    parser = argparse.ArgumentParser(
+        description="Import ICICI Bank statement into YNAB",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python icici_to_ynab.py --list-accounts
+  python icici_to_ynab.py --file statement.csv --account-id <uuid> --dry-run
+  python icici_to_ynab.py --file statement.xlsx --account-id <uuid>
+
+Configuration:
+  Settings are loaded from config.yml (required).
+  Environment variables (YNAB_API_TOKEN, etc.) override config.yml.
+        """
+    )
+    parser.add_argument("--file",            help="Path to ICICI statement (.csv or .xlsx)")
+    parser.add_argument("--account-id",      help="YNAB account UUID to import into")
+    parser.add_argument("--dry-run",         action="store_true", help="Parse and preview without sending to YNAB")
+    parser.add_argument("--no-dry-run",      action="store_true", help="Override dry_run config setting")
+    parser.add_argument("--list-accounts",   action="store_true", help="List all YNAB accounts and their IDs")
+    parser.add_argument("--config",          default="config.yml", help="Path to config file (default: config.yml)")
     args = parser.parse_args()
 
-    if not YNAB_API_TOKEN:
-        print("✗ YNAB_API_TOKEN not set. Add it to a .env file or export it as an env variable.")
-        return
+    # Load configuration
+    try:
+        config = load_config(args.config)
+    except ConfigError as e:
+        print(f"✗ Configuration error: {e}")
+        return 1
 
+    try:
+        _ = config.ynab_api_token  # Validate token is set
+    except ConfigError as e:
+        print(f"✗ {e}")
+        return 1
+
+    # Handle --list-accounts
     if args.list_accounts:
-        list_accounts()
-        return
+        try:
+            list_accounts(config)
+        except requests.RequestException as e:
+            print(f"✗ API error: {e}")
+            return 1
+        return 0
 
+    # Handle file import
     if not args.file:
         parser.error("--file is required (unless using --list-accounts)")
-    if not args.account_id and not args.dry_run:
-        parser.error("--account-id is required (run --list-accounts to find yours)")
+
+    # Determine dry-run mode
+    dry_run = config.import_dry_run
+    if args.dry_run:
+        dry_run = True
+    if args.no_dry_run:
+        dry_run = False
+
+    # Get account ID
+    account_id = args.account_id or config.import_account_id
+    if not account_id and not dry_run:
+        parser.error("--account-id is required (or set in config.yml, or use --dry-run)")
 
     print(f"\n📄 Loading statement: {args.file}")
-    df = load_statement(args.file)
+    try:
+        df = load_statement(args.file)
+    except (ValueError, FileNotFoundError) as e:
+        print(f"✗ Error loading statement: {e}")
+        return 1
+
     print(f"   Found {len(df)} rows")
 
-    account_id = args.account_id or "DRY-RUN-ACCOUNT"
+    account_id = account_id or "DRY-RUN-ACCOUNT"
     transactions = to_ynab_transactions(df, account_id)
     print(f"   Parsed {len(transactions)} valid transactions")
 
     if not transactions:
         print("Nothing to import.")
-        return
+        return 0
 
-    push_transactions(transactions, dry_run=args.dry_run)
+    try:
+        push_transactions(config, transactions, dry_run=dry_run)
+    except requests.RequestException as e:
+        print(f"✗ API error: {e}")
+        return 1
 
-    if not args.dry_run:
+    if not dry_run:
         print(f"\n✅ Done! {len(transactions)} transactions sent to YNAB.")
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    exit(main())

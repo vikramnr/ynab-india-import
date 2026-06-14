@@ -1,0 +1,34 @@
+# YNAB India Import Configuration
+# =================================
+#
+# All settings can be overridden by environment variables:
+# - YNAB_API_TOKEN
+# - YNAB_BUDGET_ID
+# - IMPORT_ACCOUNT_ID
+# - IMPORT_DRY_RUN
+# - IMPORT_MAX_BATCH_SIZE
+#
+# For security: Never commit this file with real credentials!
+# Use environment variables in production.
+
+ynab:
+  # Your YNAB API token from https://app.youneedabudget.com/settings/developer
+  # REQUIRED. Keep this secret!
+  api_token: "your_token_here"
+
+  # Budget ID to import into. Use "last-used" for your most recently used budget,
+  # or specify a specific budget UUID
+  budget_id: "last-used"
+
+import:
+  # Default account ID to import into (optional)
+  # If not set, you must pass --account-id on the command line
+  # Run: python icici_to_ynab.py --list-accounts
+  account_id: null
+
+  # Default to dry-run mode (preview only, don't send to YNAB)
+  # Can override with --dry-run flag or --no-dry-run
+  dry_run: false
+
+  # Maximum transactions per API request (YNAB limit is 1000)
+  max_batch_size: 1000
