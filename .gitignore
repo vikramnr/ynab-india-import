@@ -1,0 +1,20 @@
+# Environment / secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Bank statements (keep off version control)
+*.csv
+*.xls
+*.xlsx
+
+# OS
+.DS_Store
+Thumbs.db
